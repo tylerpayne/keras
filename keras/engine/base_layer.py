@@ -3370,6 +3370,34 @@ class Layer(tf.Module, version_utils.LayerVersionSelector):
         # Bypass Trackable logic as `__dict__` already contains this info.
         object.__setattr__(self, "__dict__", state)
 
+    def _get_state(self):
+        """Experimental method for getting the state of this layer object."""
+        result = {}
+        for child_attr, child_obj in self.__dict__.items():
+            # TODO(rchao): Store non-variable states in the dict as well.
+            if isinstance(child_obj, tf.Variable):
+                result[child_attr] = child_obj.numpy()
+        return result
+
+    def _set_state(self, state):
+        """Experimental method for setting the state of this layer object."""
+        for child_attr, child_obj in self.__dict__.items():
+            # TODO(rchao): Retrieve non-variable states from the dict as well.
+            if isinstance(child_obj, tf.Variable):
+                child_obj.assign(state[child_attr])
+
+    def _save_state(self, file_path):
+        weights = self._get_state()
+        if weights:
+            # Only save the state if that of the trackable is available.
+            np.savez(file_path, **weights)
+            return file_path
+        return None
+
+    def _load_state(self, file_path):
+        loaded_npz = np.load(file_path)
+        self._set_state({file: loaded_npz[file] for file in loaded_npz.files})
+
 
 class TensorFlowOpLayer(Layer):
     """Wraps a TensorFlow Operation in a Layer.

@@ -15,6 +15,7 @@
 """Tests for Keras python-based idempotent saving functions (experimental)."""
 import os
 import sys
+import zipfile
 
 import numpy as np
 import tensorflow.compat.v2 as tf
@@ -44,10 +45,14 @@ class MyDense(keras.layers.Dense):
 class CustomModelX(keras.Model):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.embedding = keras.layers.Embedding(4, 1)
         self.dense1 = MyDense(1)
+        self.dense2 = MyDense(1)
 
     def call(self, inputs):
-        return self.dense1(inputs)
+        out = self.embedding(inputs)
+        out = self.dense1(out)
+        return self.dense2(out)
 
     def train_step(self, data):
         tf.print(train_step_message)
@@ -97,6 +102,15 @@ class NewSavingTest(tf.test.TestCase, parameterized.TestCase):
             ],
         )
         return subclassed_model
+
+    def _get_sequential_model(self):
+        sequential_model = keras.Sequential(
+            [keras.layers.Embedding(4, 1), MyDense(1), MyDense(1)]
+        )
+        sequential_model.compile(
+            optimizer="adam", loss=["mse", keras.losses.mean_squared_error]
+        )
+        return sequential_model
 
     def test_saving_after_compile_but_before_fit(self):
         temp_dir = os.path.join(self.get_temp_dir(), "my_model")
@@ -245,9 +259,10 @@ class NewSavingTest(tf.test.TestCase, parameterized.TestCase):
         subclassed_model.fit(x, y, epochs=1)
         subclassed_model._save_new(temp_dir)
 
-        file_path = os.path.join(temp_dir, saving_lib._CONFIG_FILE)
-        with tf.io.gfile.GFile(file_path, "r") as f:
-            config_json = f.read()
+        file_path = tf.io.gfile.join(temp_dir, saving_lib._ARCHIVE_FILENAME)
+        with zipfile.ZipFile(file_path, "r") as z:
+            with z.open(saving_lib._CONFIG_FILENAME, "r") as c:
+                config_json = c.read()
         config_dict = json_utils.decode(config_json)
         self.assertEqual(
             config_dict["registered_name"], "my_custom_package>CustomModelX"
@@ -308,6 +323,53 @@ class NewSavingTest(tf.test.TestCase, parameterized.TestCase):
         # Confirming the original and saved/loaded model have same structure.
         self.assertEqual(
             functional_to_string.contents, loaded_to_string.contents
+        )
+
+    @tf.__internal__.distribute.combinations.generate(
+        tf.__internal__.test.combinations.combine(
+            model_type=["sequential", "subclassed"],
+        )
+    )
+    def test_saving_model_state(self, model_type):
+        temp_dir = os.path.join(self.get_temp_dir(), "my_model")
+        if model_type == "sequential":
+            model = self._get_sequential_model()
+        else:
+            model = self._get_subclassed_model()
+        x = np.random.random((100, 32))
+        y = np.random.random((100, 1))
+        model.fit(x, y, epochs=1)
+
+        # Assert that the archive has not been saved.
+        self.assertFalse(
+            os.path.exists(os.path.join(temp_dir, saving_lib._ARCHIVE_FILENAME))
+        )
+
+        model._save_new(temp_dir)
+
+        # Assert that the archive has been saved.
+        self.assertTrue(
+            os.path.exists(os.path.join(temp_dir, saving_lib._ARCHIVE_FILENAME))
+        )
+
+        # Assert the temporarily created dir does not persist before and after
+        # loading.
+        self.assertFalse(os.path.exists(os.path.join(temp_dir, "tmp")))
+        loaded_model = saving_lib.load(temp_dir)
+        self.assertFalse(os.path.exists(os.path.join(temp_dir, "tmp")))
+
+        # The weights are supposed to be the same (between original and loaded
+        # models).
+        for subclassed_weights, loaded_weights in zip(
+            model.get_weights(), loaded_model.get_weights()
+        ):
+            np.testing.assert_allclose(subclassed_weights, loaded_weights)
+
+    def test_get_state(self):
+        i = keras.Input((4,))
+        o = keras.layers.Dense(2)(i)
+        io_utils.print_msg(
+            f"State of the model: {keras.Model(i, o)._get_state()}"
         )
 
 

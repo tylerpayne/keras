@@ -433,18 +433,14 @@ class AttentionTest(tf.test.TestCase, parameterized.TestCase):
     def test_self_attention_causal(self, return_attention_scores):
         # Query-value tensor of shape [1, 3, 1]
         q = np.array([[[0.5], [0.8], [-0.3]]], dtype=np.float32)
-        attention_layer = keras.layers.Attention()
+        attention_layer = keras.layers.Attention(causal=True)
         if return_attention_scores:
             actual, actual_scores = attention_layer(
-                [q, q],
-                return_attention_scores=return_attention_scores,
-                use_causal_mask=True,
+                [q, q], return_attention_scores=return_attention_scores
             )
         else:
             actual = attention_layer(
-                [q, q],
-                return_attention_scores=return_attention_scores,
-                use_causal_mask=True,
+                [q, q], return_attention_scores=return_attention_scores
             )
 
         # Expected scores of shape [1, 3, 3]
@@ -483,21 +479,6 @@ class AttentionTest(tf.test.TestCase, parameterized.TestCase):
             [[[0.5], [0.66791409477], [0.26678872577]]], dtype=np.float32
         )
         self.assertAllClose(expected, actual)
-
-    def test_self_attention_causal_deprecated(self):
-        """Verify deprecated specification of causal masking still works."""
-        # Query-value tensor of shape [1, 3, 1]
-        q = np.array([[[0.5], [0.8], [-0.3]]], dtype=np.float32)
-        attention_layer_new = keras.layers.Attention()
-        new_scores = attention_layer_new(
-            [q, q],
-            use_causal_mask=True,
-        )
-        attention_layer_old = keras.layers.Attention(causal=True)
-        old_scores = attention_layer_old(
-            [q, q],
-        )
-        self.assertAllClose(new_scores, old_scores)
 
     def test_inputs_not_list(self):
         attention_layer = keras.layers.Attention()
